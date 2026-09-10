@@ -1,0 +1,97 @@
+import unittest
+from unittest.mock import patch
+
+import numpy as np
+import pandas as pd
+
+import daily_stop_loss as sl
+
+
+class TickerConversionTests(unittest.TestCase):
+    def test_bloomberg_hk_pads_to_four_digits(self):
+        self.assertEqual(sl.to_yahoo_ticker("700 HK"), "0700.HK")
+        self.assertEqual(sl.to_yahoo_ticker("5 HK Equity"), "0005.HK")
+        self.assertEqual(sl.to_yahoo_ticker("9988 HK"), "9988.HK")
+
+    def test_us_and_china_and_existing_yahoo(self):
+        self.assertEqual(sl.to_yahoo_ticker("AAPL US"), "AAPL")
+        self.assertEqual(sl.to_yahoo_ticker("BRK/B US"), "BRK-B")
+        self.assertEqual(sl.to_yahoo_ticker("600519 CH"), "600519.SS")
+        self.assertEqual(sl.to_yahoo_ticker("000858 CH"), "000858.SZ")
+        self.assertEqual(sl.to_yahoo_ticker("0700.HK"), "0700.HK")
+        self.assertEqual(sl.to_yahoo_ticker("7203 JT"), "7203.T")
+        self.assertEqual(sl.to_yahoo_ticker("005930 KS"), "005930.KS")
+
+    def test_numeric_id_uses_currency(self):
+        self.assertEqual(sl.to_yahoo_ticker("5", "HKD"), "0005.HK")
+        self.assertEqual(sl.to_yahoo_ticker("600519", "CNY"), "600519.SS")
+        self.assertEqual(sl.to_yahoo_ticker("000858", "CNY"), "000858.SZ")
+
+
+class DrawdownColumnTests(unittest.TestCase):
+    def test_ytd_holding_and_from_high_formulas_and_order(self):
+        df = pd.DataFrame(
+            {
+                "Fund Name": ["F1"],
+                "Security ID": ["AAPL US"],
+                "Sec Curr": ["USD"],
+                "Mkt Price": [80.0],
+                "Average Cost": [100.0],
+                "Price Benchmark": [100.0],
+            }
+        )
+        with patch.object(sl, "fetch_last_year_highs", return_value={"AAPL": 200.0}):
+            result = sl.add_equity_drawdown_columns(df.copy())
+
+        self.assertAlmostEqual(result.loc[0, "YTD Drawdown"], -0.20)
+        self.assertAlmostEqual(result.loc[0, "Holding Period Drawdown"], -0.20)
+        self.assertAlmostEqual(result.loc[0, "High Last Year"], 200.0)
+        self.assertAlmostEqual(result.loc[0, "Drawdown from High"], -0.60)
+
+        cols = list(result.columns)
+        self.assertEqual(cols[cols.index("YTD Drawdown") - 1], "High Last Year")
+        self.assertEqual(cols[cols.index("YTD Drawdown") + 1], "Holding Period Drawdown")
+        self.assertEqual(cols[cols.index("Holding Period Drawdown") + 1], "Drawdown from High")
+
+    def test_non_equity_has_holding_period_but_not_high_columns(self):
+        df = pd.DataFrame(
+            {
+                "Mkt Price": [90.0],
+                "Average Cost": [100.0],
+                "Price Benchmark": [120.0],
+            }
+        )
+        result = sl.add_non_equity_drawdown_columns(df.copy())
+        self.assertAlmostEqual(result.loc[0, "YTD Drawdown"], (90.0 - 120.0) / 120.0)
+        self.assertAlmostEqual(result.loc[0, "Holding Period Drawdown"], -0.10)
+        self.assertNotIn("High Last Year", result.columns)
+        self.assertNotIn("Drawdown from High", result.columns)
+        cols = list(result.columns)
+        self.assertEqual(cols[cols.index("YTD Drawdown") + 1], "Holding Period Drawdown")
+
+    def test_output_filename_includes_test_suffix(self):
+        path = sl.output_excel_path("10092026")
+        self.assertTrue(path.endswith("daily_output_10092026 test.xlsx"))
+        self.assertIn("Daily Output", path)
+
+
+class YahooHighExtractionTests(unittest.TestCase):
+    def test_max_high_from_single_ticker_frame(self):
+        hist = pd.DataFrame({"High": [10.0, 12.5, 11.0]})
+        self.assertAlmostEqual(sl._max_high_from_history(hist), 12.5)
+
+    def test_max_high_from_multiindex_download(self):
+        arrays = [["AAPL", "AAPL"], ["Open", "High"]]
+        columns = pd.MultiIndex.from_arrays(arrays)
+        data = pd.DataFrame([[1.0, 10.0], [1.0, 15.0]], columns=columns)
+        self.assertAlmostEqual(sl._max_high_from_download(data, "AAPL"), 15.0)
+
+    def test_fetch_last_year_highs_uses_download(self):
+        hist = pd.DataFrame({"High": [10.0, 22.0, 18.0]})
+        with patch.object(sl.yf, "download", return_value=hist):
+            highs = sl.fetch_last_year_highs(["AAPL"])
+        self.assertAlmostEqual(highs["AAPL"], 22.0)
+
+
+if __name__ == "__main__":
+    unittest.main()
