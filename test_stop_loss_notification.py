@@ -125,6 +125,42 @@ class NotificationColumnTests(unittest.TestCase):
             self.assertEqual(result.loc[0, "Fund Name"], "NEWFUND")
             self.assertEqual(result.loc[0, "Last Breach Date"], "New Breach")
 
+    def test_notification_drops_portia_quantity_value_columns(self):
+        today = pd.DataFrame(
+            {
+                "Fund Name": ["F1"],
+                "Security Desc": ["AAA"],
+                "Holding Period Drawdown": [-0.22],
+                "Drawdown from High": [-0.30],
+                "Breach": ["Breach Limit 1"],
+                "Severity": [1],
+                "Quantity": [1000],
+                "Total Cost": [50000],
+                "Mkt Value": [40000],
+                "Port Curr": ["USD"],
+                "Mkt Value(Port)": [40000],
+                "Mkt Value(USD)": [40000],
+            }
+        )
+        history = pd.DataFrame(columns=["Date", "Fund Name Security Desc", "Severity"])
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = os.path.join(tmp, "dest.xlsx")
+            notice_path = os.path.join(tmp, "notice.xlsx")
+            with pd.ExcelWriter(dest) as writer:
+                today.to_excel(writer, sheet_name="Equity", index=False)
+            result = notice.get_new_breach_df(
+                "Equity",
+                history,
+                dest_path=dest,
+                as_of=pd.Timestamp("2026-09-14"),
+            )
+            notice.write_notification_workbook(notice_path, {"Equity": result})
+            out = pd.read_excel(notice_path, sheet_name="Equity")
+            for col in ["Quantity", "Total Cost", "Mkt Value", "Port Curr", "Mkt Value(Port)", "Mkt Value(USD)"]:
+                self.assertNotIn(col, out.columns)
+            self.assertIn("Holding Period Drawdown", out.columns)
+            self.assertIn("Last Breach Date", out.columns)
+
     def test_resolve_uses_newer_source_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             primary = os.path.join(tmp, "daily_output_14092026 test.xlsx")

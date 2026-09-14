@@ -71,13 +71,15 @@ def drop_unnamed_columns(df):
     return df.drop(columns=drop_cols, errors="ignore")
 
 
-def order_output_columns(df):
+def order_output_columns(df, keep_extra=True):
     if df is None or df.empty:
         return df
     df = drop_unnamed_columns(df)
     preferred = [col for col in PREFERRED_COLUMNS if col in df.columns]
-    rest = [col for col in df.columns if col not in preferred]
-    return df[preferred + rest]
+    if keep_extra:
+        rest = [col for col in df.columns if col not in preferred]
+        return df[preferred + rest]
+    return df[preferred]
 
 
 def _clean_name_part(value):
@@ -186,14 +188,14 @@ def get_new_breach_df(sheet_name: str, history_df: pd.DataFrame, dest_path=None,
             else:
                 row_dict["Last Breach Date"] = last_breach_info
             new_rows.append(row_dict)
-    return order_output_columns(pd.DataFrame(new_rows))
+    return order_output_columns(pd.DataFrame(new_rows), keep_extra=False)
 
 
 def write_notification_workbook(notification_path, sheet_frames):
     os.makedirs(os.path.dirname(notification_path) or ".", exist_ok=True)
     with pd.ExcelWriter(notification_path, engine="openpyxl") as writer:
         for sheet_name, df in sheet_frames.items():
-            out = order_output_columns(df) if df is not None else pd.DataFrame()
+            out = order_output_columns(df, keep_extra=False) if df is not None else pd.DataFrame()
             if out is None:
                 out = pd.DataFrame()
             out.to_excel(writer, sheet_name=sheet_name, index=False)
