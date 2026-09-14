@@ -125,6 +125,32 @@ class DrawdownColumnTests(unittest.TestCase):
         self.assertEqual(sl.MUTUAL_FUND_LIMIT_1, sl.EQUITY_LIMIT_1)
         self.assertEqual(sl.MUTUAL_FUND_LIMIT_2, sl.EQUITY_LIMIT_2)
 
+    def test_equity_limits_listed_by_currency(self):
+        expected = ["HKD", "SGD", "KRW", "USD", "EUR", "JPY", "CAD", "GBP", "CNH", "AUD"]
+        self.assertEqual(list(sl.EQUITY_LIMITS_BY_CURRENCY.keys()), expected)
+        self.assertEqual(sl.equity_limits_for_currency("hkd"), sl.EQUITY_LIMITS_BY_CURRENCY["HKD"])
+        self.assertEqual(sl.equity_limits_for_currency("TWD"), (sl.EQUITY_LIMIT_1, sl.EQUITY_LIMIT_2))
+
+    def test_assign_equity_breaches_uses_sec_curr_limits(self):
+        original = dict(sl.EQUITY_LIMITS_BY_CURRENCY)
+        try:
+            sl.EQUITY_LIMITS_BY_CURRENCY["KRW"] = (-0.28, -0.38)
+            sl.EQUITY_LIMITS_BY_CURRENCY["USD"] = (-0.20, -0.30)
+            df = pd.DataFrame(
+                {
+                    "Sec Curr": ["KRW", "KRW", "USD"],
+                    "YTD Drawdown": [0.0, 0.0, 0.0],
+                    "Holding Period Drawdown": [-0.30, -0.40, -0.30],
+                }
+            )
+            result = sl.assign_equity_breaches(df)
+            self.assertEqual(list(result["Limit 1"]), [-0.28, -0.28, -0.20])
+            self.assertEqual(list(result["Limit 2"]), [-0.38, -0.38, -0.30])
+            self.assertEqual(list(result["Breach"]), ["Breach Limit 1", "Breach Limit 2", "Breach Limit 2"])
+        finally:
+            sl.EQUITY_LIMITS_BY_CURRENCY.clear()
+            sl.EQUITY_LIMITS_BY_CURRENCY.update(original)
+
 
 class YahooHighExtractionTests(unittest.TestCase):
     def test_max_high_from_single_ticker_frame(self):

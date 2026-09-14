@@ -18,8 +18,8 @@ OUTPUT_DIR = r"Q:\\Risk Management\\每日 04 Stop_Loss\\Daily Output\\"
 # ---------------------------------------------------------------------------
 # Stop-loss limits — edit these values only when policy changes.
 # Limit 1 is the first (milder) breach; Limit 2 is the stricter breach.
-# Mutual fund currently shares the equity limits (change EQUITY_* once for both).
 # ---------------------------------------------------------------------------
+# Default equity limits: used for any Sec Curr not listed in EQUITY_LIMITS_BY_CURRENCY.
 EQUITY_LIMIT_1 = -0.20
 EQUITY_LIMIT_2 = -0.30
 MUTUAL_FUND_LIMIT_1 = EQUITY_LIMIT_1
@@ -29,6 +29,22 @@ HY_LIMIT_2 = -0.25
 IG_LIMIT_1 = -0.08
 IG_LIMIT_2 = -0.15
 EXCLUDED_HY_FUNDS = ("TBHTHYEF",)
+
+# Equity limits by Portia column "Sec Curr".
+# Each entry is (Limit 1, Limit 2). Edit one currency without changing the others.
+# Unlisted currencies fall back to EQUITY_LIMIT_1 / EQUITY_LIMIT_2.
+EQUITY_LIMITS_BY_CURRENCY = {
+    "HKD": (-0.20, -0.30),
+    "SGD": (-0.20, -0.30),
+    "KRW": (-0.20, -0.30),
+    "USD": (-0.20, -0.30),
+    "EUR": (-0.20, -0.30),
+    "JPY": (-0.20, -0.30),
+    "CAD": (-0.20, -0.30),
+    "GBP": (-0.20, -0.30),
+    "CNH": (-0.20, -0.30),
+    "AUD": (-0.20, -0.30),
+}
 
 BLOOMBERG_EXCHANGE_TO_YAHOO = {
     "US": "",
@@ -331,6 +347,16 @@ def _holding_period_drawdown_series(df):
     return pd.to_numeric(df["Holding Period Drawdown"], errors="coerce")
 
 
+def equity_limits_for_currency(sec_curr):
+    """Return (Limit 1, Limit 2) for a Portia Sec Curr value."""
+    if sec_curr is None or (isinstance(sec_curr, float) and np.isnan(sec_curr)):
+        return (EQUITY_LIMIT_1, EQUITY_LIMIT_2)
+    curr = str(sec_curr).replace("\xa0", " ").strip().upper()
+    if not curr or curr in ("NAN", "NONE", "<NA>"):
+        return (EQUITY_LIMIT_1, EQUITY_LIMIT_2)
+    return EQUITY_LIMITS_BY_CURRENCY.get(curr, (EQUITY_LIMIT_1, EQUITY_LIMIT_2))
+
+
 def assign_two_limit_breaches(df, limit_1, limit_2, extra_limit_2_mask=None):
     """Assign Limit 1/2 and Breach from Holding Period Drawdown only. Never uses YTD Drawdown."""
     dd = _holding_period_drawdown_series(df)
@@ -349,7 +375,19 @@ def assign_two_limit_breaches(df, limit_1, limit_2, extra_limit_2_mask=None):
 
 
 def assign_equity_breaches(df):
-    return assign_two_limit_breaches(df, EQUITY_LIMIT_1, EQUITY_LIMIT_2)
+    """Assign equity Limit 1/2 and Breach using Sec Curr-specific thresholds."""
+    dd = _holding_period_drawdown_series(df)
+    if "Sec Curr" in df.columns:
+        limits = df["Sec Curr"].map(equity_limits_for_currency)
+    else:
+        limits = pd.Series([(EQUITY_LIMIT_1, EQUITY_LIMIT_2)] * len(df), index=df.index)
+    df["Limit 1"] = limits.map(lambda pair: pair[0])
+    df["Limit 2"] = limits.map(lambda pair: pair[1])
+    breach = pd.Series("No Breach", index=df.index)
+    breach = breach.mask((dd <= df["Limit 1"]) & (dd > df["Limit 2"]), "Breach Limit 1")
+    breach = breach.mask(dd <= df["Limit 2"], "Breach Limit 2")
+    df["Breach"] = breach
+    return df
 
 
 def assign_fi_breaches(df):
@@ -369,6 +407,11 @@ def assign_fi_breaches(df):
     breach = breach.mask(ig & (dd <= IG_LIMIT_2), "Breach Limit 2")
     df["Breach"] = breach
     return df
+
+
+def assign_mutualfund_breaches(df):
+    extra_limit_2 = pd.to_numeric(df["Average Cost"], errors="coerce") > pd.to_numeric(df["Mkt Price"], errors="coerce")
+    return assign_two_limit_breaches(df, MUTUAL_FUND_LIMIT_1, MUTUAL_FUND_LIMIT_2, extra_limit_2_mask=extra_limit_2)
 
 
 def assign_severity(df):
