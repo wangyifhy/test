@@ -15,6 +15,21 @@ import yfinance as yf
 
 OUTPUT_DIR = r"Q:\\Risk Management\\每日 04 Stop_Loss\\Daily Output\\"
 
+# ---------------------------------------------------------------------------
+# Stop-loss limits — edit these values only when policy changes.
+# Limit 1 is the first (milder) breach; Limit 2 is the stricter breach.
+# Mutual fund currently shares the equity limits (change EQUITY_* once for both).
+# ---------------------------------------------------------------------------
+EQUITY_LIMIT_1 = -0.20
+EQUITY_LIMIT_2 = -0.30
+MUTUAL_FUND_LIMIT_1 = EQUITY_LIMIT_1
+MUTUAL_FUND_LIMIT_2 = EQUITY_LIMIT_2
+HY_LIMIT_1 = -0.15
+HY_LIMIT_2 = -0.25
+IG_LIMIT_1 = -0.08
+IG_LIMIT_2 = -0.15
+EXCLUDED_HY_FUNDS = ("TBHTHYEF",)
+
 BLOOMBERG_EXCHANGE_TO_YAHOO = {
     "US": "",
     "UN": "",
@@ -334,31 +349,31 @@ def assign_two_limit_breaches(df, limit_1, limit_2, extra_limit_2_mask=None):
 
 
 def assign_equity_breaches(df):
-    return assign_two_limit_breaches(df, -0.20, -0.30)
+    return assign_two_limit_breaches(df, EQUITY_LIMIT_1, EQUITY_LIMIT_2)
 
 
 def assign_fi_breaches(df):
     dd = _holding_period_drawdown_series(df)
     hy = df["Grade"].astype(str) == "HY"
     ig = df["Grade"].astype(str) == "IG"
-    exclude_hy = df["Fund Name"].astype(str) == "TBHTHYEF"
+    exclude_hy = df["Fund Name"].astype(str).isin(EXCLUDED_HY_FUNDS)
 
-    df["Limit 1"] = np.where(hy, -0.15, -0.08)
-    df["Limit 2"] = np.where(hy, -0.25, -0.15)
+    df["Limit 1"] = np.where(hy, HY_LIMIT_1, IG_LIMIT_1)
+    df["Limit 2"] = np.where(hy, HY_LIMIT_2, IG_LIMIT_2)
 
     breach = pd.Series("No Breach", index=df.index)
     hy_active = hy & ~exclude_hy
-    breach = breach.mask(hy_active & (dd <= -0.15) & (dd > -0.25), "Breach Limit 1")
-    breach = breach.mask(hy_active & (dd <= -0.25), "Breach Limit 2")
-    breach = breach.mask(ig & (dd <= -0.08) & (dd > -0.15), "Breach Limit 1")
-    breach = breach.mask(ig & (dd <= -0.15), "Breach Limit 2")
+    breach = breach.mask(hy_active & (dd <= HY_LIMIT_1) & (dd > HY_LIMIT_2), "Breach Limit 1")
+    breach = breach.mask(hy_active & (dd <= HY_LIMIT_2), "Breach Limit 2")
+    breach = breach.mask(ig & (dd <= IG_LIMIT_1) & (dd > IG_LIMIT_2), "Breach Limit 1")
+    breach = breach.mask(ig & (dd <= IG_LIMIT_2), "Breach Limit 2")
     df["Breach"] = breach
     return df
 
 
 def assign_mutualfund_breaches(df):
     extra_limit_2 = pd.to_numeric(df["Average Cost"], errors="coerce") > pd.to_numeric(df["Mkt Price"], errors="coerce")
-    return assign_two_limit_breaches(df, -0.20, -0.30, extra_limit_2_mask=extra_limit_2)
+    return assign_two_limit_breaches(df, MUTUAL_FUND_LIMIT_1, MUTUAL_FUND_LIMIT_2, extra_limit_2_mask=extra_limit_2)
 
 
 def add_equity_drawdown_columns(df):

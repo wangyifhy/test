@@ -76,35 +76,41 @@ class DrawdownColumnTests(unittest.TestCase):
 
     def test_breach_uses_holding_period_drawdown_not_ytd(self):
         self.assertEqual(sl.BREACH_DRAWDOWN_COLUMN, "Holding Period Drawdown")
-        self.assertEqual(sl.classify_two_limit_breach(-0.10, -0.20, -0.30), "No Breach")
-        self.assertEqual(sl.classify_two_limit_breach(-0.20, -0.20, -0.30), "Breach Limit 1")
-        self.assertEqual(sl.classify_two_limit_breach(-0.25, -0.20, -0.30), "Breach Limit 1")
-        self.assertEqual(sl.classify_two_limit_breach(-0.30, -0.20, -0.30), "Breach Limit 2")
-        self.assertEqual(sl.classify_two_limit_breach(-0.35, -0.20, -0.30), "Breach Limit 2")
-        # YTD of -35% would have been Limit 2; holding-period -10% is not a breach.
-        ytd = -0.35
-        holding = -0.10
-        self.assertEqual(sl.classify_two_limit_breach(ytd, -0.20, -0.30), "Breach Limit 2")
-        self.assertEqual(sl.classify_two_limit_breach(holding, -0.20, -0.30), "No Breach")
+        l1, l2 = sl.EQUITY_LIMIT_1, sl.EQUITY_LIMIT_2
+        self.assertEqual(sl.classify_two_limit_breach(l1 + 0.10, l1, l2), "No Breach")
+        self.assertEqual(sl.classify_two_limit_breach(l1, l1, l2), "Breach Limit 1")
+        self.assertEqual(sl.classify_two_limit_breach((l1 + l2) / 2, l1, l2), "Breach Limit 1")
+        self.assertEqual(sl.classify_two_limit_breach(l2, l1, l2), "Breach Limit 2")
+        self.assertEqual(sl.classify_two_limit_breach(l2 - 0.05, l1, l2), "Breach Limit 2")
+        ytd = l2 - 0.05
+        holding = l1 + 0.10
+        self.assertEqual(sl.classify_two_limit_breach(ytd, l1, l2), "Breach Limit 2")
+        self.assertEqual(sl.classify_two_limit_breach(holding, l1, l2), "No Breach")
 
     def test_assign_equity_breaches_ignores_ytd_and_offset_index(self):
+        l1, l2 = sl.EQUITY_LIMIT_1, sl.EQUITY_LIMIT_2
         df = pd.DataFrame(
             {
-                "YTD Drawdown": [-0.40, -0.40, -0.01],
-                "Holding Period Drawdown": [-0.05, -0.22, -0.35],
+                "YTD Drawdown": [l2 - 0.10, l2 - 0.10, -0.01],
+                "Holding Period Drawdown": [l1 + 0.15, (l1 + l2) / 2, l2 - 0.05],
             },
             index=[10, 20, 30],
         )
         result = sl.assign_equity_breaches(df)
         self.assertEqual(list(result["Breach"]), ["No Breach", "Breach Limit 1", "Breach Limit 2"])
+        self.assertTrue((result["Limit 1"] == l1).all())
+        self.assertTrue((result["Limit 2"] == l2).all())
 
     def test_assign_fi_breaches_uses_holding_period(self):
+        hy1, hy2 = sl.HY_LIMIT_1, sl.HY_LIMIT_2
+        ig1, ig2 = sl.IG_LIMIT_1, sl.IG_LIMIT_2
+        excluded = sl.EXCLUDED_HY_FUNDS[0]
         df = pd.DataFrame(
             {
-                "Fund Name": ["A", "A", "TBHTHYEF", "B"],
+                "Fund Name": ["A", "A", excluded, "B"],
                 "Grade": ["HY", "HY", "HY", "IG"],
-                "YTD Drawdown": [-0.40, -0.40, -0.40, -0.40],
-                "Holding Period Drawdown": [-0.10, -0.20, -0.40, -0.10],
+                "YTD Drawdown": [hy2 - 0.15, hy2 - 0.15, hy2 - 0.15, hy2 - 0.15],
+                "Holding Period Drawdown": [hy1 + 0.05, (hy1 + hy2) / 2, hy2 - 0.15, (ig1 + ig2) / 2],
             }
         )
         result = sl.assign_fi_breaches(df)
@@ -112,6 +118,12 @@ class DrawdownColumnTests(unittest.TestCase):
             list(result["Breach"]),
             ["No Breach", "Breach Limit 1", "No Breach", "Breach Limit 1"],
         )
+        self.assertEqual(list(result["Limit 1"]), [hy1, hy1, hy1, ig1])
+        self.assertEqual(list(result["Limit 2"]), [hy2, hy2, hy2, ig2])
+
+    def test_mutual_fund_limits_follow_equity_constants(self):
+        self.assertEqual(sl.MUTUAL_FUND_LIMIT_1, sl.EQUITY_LIMIT_1)
+        self.assertEqual(sl.MUTUAL_FUND_LIMIT_2, sl.EQUITY_LIMIT_2)
 
 
 class YahooHighExtractionTests(unittest.TestCase):
