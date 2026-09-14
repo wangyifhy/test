@@ -108,6 +108,27 @@ class YahooHighExtractionTests(unittest.TestCase):
         self.assertAlmostEqual(highs["AAPL"], 22.0)
         self.assertEqual(fake.kwargs["auto_adjust"], False)
 
+    def test_pence_scale_converts_gbpence_to_pounds(self):
+        self.assertEqual(sl.yahoo_price_scale("AZN.L", "GBp"), 0.01)
+        self.assertEqual(sl.yahoo_price_scale("AZN.L", "GBX"), 0.01)
+        self.assertEqual(sl.yahoo_price_scale("AZN.L", None), 0.01)
+        self.assertEqual(sl.yahoo_price_scale("AAPL", "USD"), 1.0)
+        self.assertEqual(sl.yahoo_price_scale("AAPL", "GBP"), 1.0)
+
+    def test_london_high_is_converted_from_pence_to_pounds(self):
+        hist = pd.DataFrame({"High": [15732.0, 11708.0]})
+
+        class FakeTicker:
+            fast_info = {"currency": "GBp"}
+
+            def history(self, **kwargs):
+                return hist
+
+        with patch.object(sl.yf, "download", return_value=hist):
+            with patch.object(sl.yf, "Ticker", return_value=FakeTicker()):
+                highs = sl.fetch_last_year_highs(["AZN.L"])
+        self.assertAlmostEqual(highs["AZN.L"], 157.32)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -160,11 +160,58 @@ def _max_high_from_download(data, ticker, single=False):
     return np.nan
 
 
+LONDON_YAHOO_SUFFIXES = (".L", ".IL")
+PENCE_CURRENCIES = {"GBp", "GBX", "GBx"}
+
+
+def is_pence_currency(currency):
+    """Yahoo uses GBp/GBX for sterling pence; GBP would mean pounds."""
+    if currency is None:
+        return False
+    text = str(currency).strip()
+    return text in PENCE_CURRENCIES or text.upper() == "GBX"
+
+
+def fetch_yahoo_currency(yahoo_ticker):
+    try:
+        return yf.Ticker(yahoo_ticker).fast_info.get("currency")
+    except Exception:
+        return None
+
+
+def yahoo_price_scale(yahoo_ticker, currency=None):
+    """Convert Yahoo minor units to the major currency (GBp pence -> GBP pounds)."""
+    if is_pence_currency(currency):
+        return 0.01
+    ticker_upper = str(yahoo_ticker or "").upper()
+    if currency is None and ticker_upper.endswith(LONDON_YAHOO_SUFFIXES):
+        return 0.01
+    return 1.0
+
+
+def _maybe_fetch_currency(yahoo_ticker):
+    ticker_upper = str(yahoo_ticker or "").upper()
+    if ticker_upper.endswith(LONDON_YAHOO_SUFFIXES):
+        return fetch_yahoo_currency(yahoo_ticker)
+    return None
+
+
+def apply_yahoo_price_scale(highs):
+    scaled = {}
+    for ticker, high in highs.items():
+        if high is None or (isinstance(high, float) and np.isnan(high)) or pd.isna(high):
+            scaled[ticker] = high
+            continue
+        currency = _maybe_fetch_currency(ticker)
+        scaled[ticker] = float(high) * yahoo_price_scale(ticker, currency)
+    return scaled
+
+
 def fetch_last_year_highs(yahoo_tickers):
     """Return a dict of Yahoo ticker -> raw (unadjusted) max High over the trailing year.
 
-    Prices are not adjusted for stock splits or dividends, so they match the
-    quoted market price scale (e.g. AZN.L in GBp pence).
+    Prices are not adjusted for stock splits or dividends. London quotes in GBp
+    (pence) are converted to GBP (pounds), e.g. AZN.L 15732 GBp -> 157.32 GBP.
     """
     highs = {ticker: np.nan for ticker in yahoo_tickers}
     tickers = [ticker for ticker in yahoo_tickers if ticker]
@@ -194,7 +241,7 @@ def fetch_last_year_highs(yahoo_tickers):
             highs[ticker] = _max_high_from_history(hist)
         except Exception as exc:
             print("Yahoo Finance history failed for " + str(ticker) + ":", exc)
-    return highs
+    return apply_yahoo_price_scale(highs)
 
 
 def add_high_last_year(df):
