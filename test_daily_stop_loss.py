@@ -74,6 +74,19 @@ class DrawdownColumnTests(unittest.TestCase):
         self.assertTrue(path.endswith("daily_output_10092026 test.xlsx"))
         self.assertIn("Daily Output", path)
 
+    def test_breach_uses_holding_period_drawdown_not_ytd(self):
+        self.assertEqual(sl.BREACH_DRAWDOWN_COLUMN, "Holding Period Drawdown")
+        self.assertEqual(sl.classify_two_limit_breach(-0.10, -0.20, -0.30), "No Breach")
+        self.assertEqual(sl.classify_two_limit_breach(-0.20, -0.20, -0.30), "Breach Limit 1")
+        self.assertEqual(sl.classify_two_limit_breach(-0.25, -0.20, -0.30), "Breach Limit 1")
+        self.assertEqual(sl.classify_two_limit_breach(-0.30, -0.20, -0.30), "Breach Limit 2")
+        self.assertEqual(sl.classify_two_limit_breach(-0.35, -0.20, -0.30), "Breach Limit 2")
+        # YTD of -35% would have been Limit 2; holding-period -10% is not a breach.
+        ytd = -0.35
+        holding = -0.10
+        self.assertEqual(sl.classify_two_limit_breach(ytd, -0.20, -0.30), "Breach Limit 2")
+        self.assertEqual(sl.classify_two_limit_breach(holding, -0.20, -0.30), "No Breach")
+
 
 class YahooHighExtractionTests(unittest.TestCase):
     def test_max_high_from_single_ticker_frame(self):
