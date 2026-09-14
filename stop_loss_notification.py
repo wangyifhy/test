@@ -60,11 +60,10 @@ PREFERRED_COLUMNS = [
 def resolve_source_file_path(primary_path=None, legacy_path=None):
     primary = primary_path if primary_path is not None else source_file_path
     legacy = legacy_path if legacy_path is not None else legacy_source_file_path
-    if os.path.exists(primary):
+    candidates = [path for path in (primary, legacy) if path and os.path.exists(path)]
+    if not candidates:
         return primary
-    if os.path.exists(legacy):
-        return legacy
-    return primary
+    return max(candidates, key=os.path.getmtime)
 
 
 def drop_unnamed_columns(df):
@@ -81,16 +80,43 @@ def order_output_columns(df):
     return df[preferred + rest]
 
 
+def _clean_name_part(value):
+    text = str(value).replace("\xa0", " ").strip()
+    if text.lower() in ("nan", "none", "<na>", "nat"):
+        return ""
+    return " ".join(text.split())
+
+
+def name_key(fund_name, security_desc):
+    return _clean_name_part(fund_name) + " | " + _clean_name_part(security_desc)
+
+
+def is_active_breach(value):
+    text = _clean_name_part(value)
+    return text not in ("", "No Breach")
+
+
+def history_matches(history_df, combined_text):
+    if history_df is None or history_df.empty or "Fund Name Security Desc" not in history_df.columns:
+        return pd.DataFrame()
+    keys = history_df["Fund Name Security Desc"].map(_clean_name_part)
+    return history_df[keys == _clean_name_part(combined_text)]
+
+
 def load_breach_sheet(sheet_name: str, log_path=None) -> pd.DataFrame:
     path = log_path if log_path is not None else breach_list_path
     df_raw = pd.read_excel(path, sheet_name=sheet_name)
     df_raw["Fund Name"] = df_raw["Fund Name"].fillna("")
     df_raw["Security Desc"] = df_raw["Security Desc"].fillna("")
     df_out = pd.DataFrame({
-        "Date": pd.to_datetime(df_raw["Date"]).ffill().dt.strftime("%Y-%m-%d"),
-        "Fund Name Security Desc": df_raw["Fund Name"].str.strip().str.cat(df_raw["Security Desc"].str.strip(), sep=" | "),
+        "Date": pd.to_datetime(df_raw["Date"], errors="coerce").ffill(),
+        "Fund Name Security Desc": [
+            name_key(fund, desc)
+            for fund, desc in zip(df_raw["Fund Name"], df_raw["Security Desc"])
+        ],
         "Severity": pd.to_numeric(df_raw["Severity"], errors="coerce"),
     })
+    df_out["Date"] = pd.to_datetime(df_out["Date"], errors="coerce").dt.strftime("%Y-%m-%d")
     df_out["Severity"] = df_out["Severity"].fillna(0).astype(int)
     return df_out
 
@@ -107,7 +133,7 @@ def filter_today_breaches(source_path, dest_path, sheet_names=NOTICE_SHEETS):
             df = pd.read_excel(source_path, sheet_name=sheet_name)
             df = drop_unnamed_columns(df)
             if "Breach" in df.columns:
-                df = df[df["Breach"] != "No Breach"].copy()
+                df = df[df["Breach"].map(is_active_breach)].copy()
             else:
                 df = df.iloc[0:0].copy()
             df = order_output_columns(df)
@@ -116,21 +142,21 @@ def filter_today_breaches(source_path, dest_path, sheet_names=NOTICE_SHEETS):
 
 def get_new_breach_df(sheet_name: str, history_df: pd.DataFrame, dest_path=None, as_of=None) -> pd.DataFrame:
     path = dest_path if dest_path is not None else destination_file_path
-    as_of_ts = as_of if as_of is not None else today_ts
+    as_of_ts = pd.Timestamp(as_of) if as_of is not None else today_ts
     df_today = pd.read_excel(path, sheet_name=sheet_name)
     df_today = drop_unnamed_columns(df_today)
     if df_today.empty or "Fund Name" not in df_today.columns:
         return pd.DataFrame()
 
     df_today["Fund Name"] = df_today["Fund Name"].fillna("")
-    df_today["Security Desc"] = df_today["Security Desc"].fillna("") if "Security Desc" in df_today.columns else ""
+    if "Security Desc" in df_today.columns:
+        df_today["Security Desc"] = df_today["Security Desc"].fillna("")
+    else:
+        df_today["Security Desc"] = ""
     new_rows = []
 
-    history_keys = history_df["Fund Name Security Desc"] if not history_df.empty and "Fund Name Security Desc" in history_df.columns else pd.Series(dtype=object)
-
     for _, row in df_today.iterrows():
-        security_desc = row["Security Desc"] if "Security Desc" in df_today.columns else ""
-        combined_text = str(row["Fund Name"]).strip() + " | " + str(security_desc).strip()
+        combined_text = name_key(row["Fund Name"], row["Security Desc"])
         severity_today = pd.to_numeric(row.get("Severity"), errors="coerce")
         if pd.isna(severity_today):
             severity_today = 0
@@ -138,24 +164,25 @@ def get_new_breach_df(sheet_name: str, history_df: pd.DataFrame, dest_path=None,
         last_breach_date = None
         should_add = False
 
-        if history_df.empty or combined_text not in history_keys.values:
+        match_rows = history_matches(history_df, combined_text)
+        if match_rows.empty:
+            # Not in the log at all — always notify.
             should_add = True
         else:
-            match_rows = history_df[history_df["Fund Name Security Desc"] == combined_text]
-            max_sev = match_rows["Severity"].max()
+            max_sev = pd.to_numeric(match_rows["Severity"], errors="coerce").max()
             last_dt_str = match_rows["Date"].max()
-            last_breach_date = pd.Timestamp(last_dt_str)
-            if severity_today > max_sev:
+            last_breach_date = pd.to_datetime(last_dt_str, errors="coerce")
+            if pd.isna(max_sev) or pd.isna(last_breach_date):
                 should_add = True
-            else:
-                day_diff = (as_of_ts - last_breach_date).days
-                if day_diff > 90:
-                    should_add = True
+            elif severity_today > max_sev:
+                should_add = True
+            elif (as_of_ts.normalize() - pd.Timestamp(last_breach_date).normalize()).days > 90:
+                should_add = True
 
         if should_add:
             row_dict = row.to_dict()
-            if last_breach_date is not None:
-                row_dict["Last Breach Date"] = last_breach_date.strftime("%Y-%m-%d")
+            if last_breach_date is not None and not pd.isna(last_breach_date):
+                row_dict["Last Breach Date"] = pd.Timestamp(last_breach_date).strftime("%Y-%m-%d")
             else:
                 row_dict["Last Breach Date"] = last_breach_info
             new_rows.append(row_dict)
@@ -194,6 +221,8 @@ def main():
     )
 
     print("Source file:", source_path)
+    print("Destination file:", destination_file_path)
+    print("Notification file:", notification_file_path)
     print("===== Equity New Breach =====")
     print(df_equity_notice)
     print("===== High Yield New Breach =====")

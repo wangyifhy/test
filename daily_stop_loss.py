@@ -371,9 +371,12 @@ def assign_fi_breaches(df):
     return df
 
 
-def assign_mutualfund_breaches(df):
-    extra_limit_2 = pd.to_numeric(df["Average Cost"], errors="coerce") > pd.to_numeric(df["Mkt Price"], errors="coerce")
-    return assign_two_limit_breaches(df, MUTUAL_FUND_LIMIT_1, MUTUAL_FUND_LIMIT_2, extra_limit_2_mask=extra_limit_2)
+def assign_severity(df):
+    """Set Severity from Breach text: 'Breach Limit 1' -> 1, 'Breach Limit 2' -> 2."""
+    df = df.copy()
+    severity = df["Breach"].astype(str).str.extract(r"(\d+)\s*$", expand=False)
+    df["Severity"] = severity.fillna("")
+    return df
 
 
 def add_equity_drawdown_columns(df):
@@ -578,24 +581,8 @@ def main():
 
     # For Fixed Income (Holding Period Drawdown; exclude TBHTHYEF)
     portia_data_fi_merge = assign_fi_breaches(portia_data_fi_merge)
-            
-
-    #### add a new column called Severity #########
-    portia_data_equity_merge['Severity'] = ''
-    for index, row in portia_data_equity_merge.iterrows():
-        if row['Breach'] != 'No Breach':
-            first_string_from_right = row['Breach'].rsplit(maxsplit=1)[-1]
-            first_string_from_right = int(first_string_from_right)
-            portia_data_equity_merge.at[index, 'Severity'] =str(first_string_from_right)
-            
-
-    #### add a new column called Severity #########
-    portia_data_fi_merge['Severity'] = ''
-    for index, row in portia_data_fi_merge.iterrows():
-        if row['Breach'] != 'No Breach':
-            first_string_from_right = row['Breach'].rsplit(maxsplit=1)[-1]
-            first_string_from_right = int(first_string_from_right)
-            portia_data_fi_merge.at[index, 'Severity'] = str(first_string_from_right)
+    portia_data_equity_merge = assign_severity(portia_data_equity_merge)
+    portia_data_fi_merge = assign_severity(portia_data_fi_merge)
 
     ##portia_data_equity_merge['Severity'] = portia_data_equity_merge['Severity'].astype(int)
 

@@ -94,14 +94,45 @@ class NotificationColumnTests(unittest.TestCase):
             self.assertIn("Holding Period Drawdown", result.columns)
             self.assertIn("Drawdown from High", result.columns)
 
-    def test_resolve_prefers_updated_test_filename(self):
+    def test_new_breach_not_dropped_when_history_match_is_empty(self):
+        today = pd.DataFrame(
+            {
+                "Fund Name": ["NEWFUND"],
+                "Security Desc": ["NEW STOCK"],
+                "Holding Period Drawdown": [-0.25],
+                "Breach": ["Breach Limit 1"],
+                "Severity": [1],
+            }
+        )
+        history = pd.DataFrame(
+            {
+                "Date": [pd.NaT],
+                "Fund Name Security Desc": ["OTHER | OLD"],
+                "Severity": [2],
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = os.path.join(tmp, "dest.xlsx")
+            with pd.ExcelWriter(dest) as writer:
+                today.to_excel(writer, sheet_name="Equity", index=False)
+            result = notice.get_new_breach_df(
+                "Equity",
+                history,
+                dest_path=dest,
+                as_of=pd.Timestamp("2026-09-14"),
+            )
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result.loc[0, "Fund Name"], "NEWFUND")
+            self.assertEqual(result.loc[0, "Last Breach Date"], "New Breach")
+
+    def test_resolve_uses_newer_source_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             primary = os.path.join(tmp, "daily_output_14092026 test.xlsx")
             legacy = os.path.join(tmp, "daily_output_14092026.xlsx")
             open(primary, "w").close()
             open(legacy, "w").close()
-            self.assertEqual(notice.resolve_source_file_path(primary, legacy), primary)
-            os.remove(primary)
+            older = datetime.now().timestamp() - 3600
+            os.utime(primary, (older, older))
             self.assertEqual(notice.resolve_source_file_path(primary, legacy), legacy)
 
 
