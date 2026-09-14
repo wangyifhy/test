@@ -87,6 +87,32 @@ class DrawdownColumnTests(unittest.TestCase):
         self.assertEqual(sl.classify_two_limit_breach(ytd, -0.20, -0.30), "Breach Limit 2")
         self.assertEqual(sl.classify_two_limit_breach(holding, -0.20, -0.30), "No Breach")
 
+    def test_assign_equity_breaches_ignores_ytd_and_offset_index(self):
+        df = pd.DataFrame(
+            {
+                "YTD Drawdown": [-0.40, -0.40, -0.01],
+                "Holding Period Drawdown": [-0.05, -0.22, -0.35],
+            },
+            index=[10, 20, 30],
+        )
+        result = sl.assign_equity_breaches(df)
+        self.assertEqual(list(result["Breach"]), ["No Breach", "Breach Limit 1", "Breach Limit 2"])
+
+    def test_assign_fi_breaches_uses_holding_period(self):
+        df = pd.DataFrame(
+            {
+                "Fund Name": ["A", "A", "TBHTHYEF", "B"],
+                "Grade": ["HY", "HY", "HY", "IG"],
+                "YTD Drawdown": [-0.40, -0.40, -0.40, -0.40],
+                "Holding Period Drawdown": [-0.10, -0.20, -0.40, -0.10],
+            }
+        )
+        result = sl.assign_fi_breaches(df)
+        self.assertEqual(
+            list(result["Breach"]),
+            ["No Breach", "Breach Limit 1", "No Breach", "Breach Limit 1"],
+        )
+
 
 class YahooHighExtractionTests(unittest.TestCase):
     def test_max_high_from_single_ticker_frame(self):

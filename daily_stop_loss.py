@@ -310,6 +310,57 @@ def classify_two_limit_breach(drawdown, limit_1, limit_2):
     return "No Breach"
 
 
+def _holding_period_drawdown_series(df):
+    if "Holding Period Drawdown" not in df.columns:
+        raise KeyError("Holding Period Drawdown is required to assign Breach; YTD Drawdown is not used")
+    return pd.to_numeric(df["Holding Period Drawdown"], errors="coerce")
+
+
+def assign_two_limit_breaches(df, limit_1, limit_2, extra_limit_2_mask=None):
+    """Assign Limit 1/2 and Breach from Holding Period Drawdown only. Never uses YTD Drawdown."""
+    dd = _holding_period_drawdown_series(df)
+    df["Limit 1"] = limit_1
+    df["Limit 2"] = limit_2
+    breach = pd.Series("No Breach", index=df.index)
+    limit_2_mask = dd <= limit_2
+    if extra_limit_2_mask is not None:
+        extra = extra_limit_2_mask.reindex(df.index)
+        extra = extra.fillna(False).astype(bool)
+        limit_2_mask = limit_2_mask & extra
+    breach = breach.mask((dd <= limit_1) & (dd > limit_2), "Breach Limit 1")
+    breach = breach.mask(limit_2_mask, "Breach Limit 2")
+    df["Breach"] = breach
+    return df
+
+
+def assign_equity_breaches(df):
+    return assign_two_limit_breaches(df, -0.20, -0.30)
+
+
+def assign_fi_breaches(df):
+    dd = _holding_period_drawdown_series(df)
+    hy = df["Grade"].astype(str) == "HY"
+    ig = df["Grade"].astype(str) == "IG"
+    exclude_hy = df["Fund Name"].astype(str) == "TBHTHYEF"
+
+    df["Limit 1"] = np.where(hy, -0.15, -0.08)
+    df["Limit 2"] = np.where(hy, -0.25, -0.15)
+
+    breach = pd.Series("No Breach", index=df.index)
+    hy_active = hy & ~exclude_hy
+    breach = breach.mask(hy_active & (dd <= -0.15) & (dd > -0.25), "Breach Limit 1")
+    breach = breach.mask(hy_active & (dd <= -0.25), "Breach Limit 2")
+    breach = breach.mask(ig & (dd <= -0.08) & (dd > -0.15), "Breach Limit 1")
+    breach = breach.mask(ig & (dd <= -0.15), "Breach Limit 2")
+    df["Breach"] = breach
+    return df
+
+
+def assign_mutualfund_breaches(df):
+    extra_limit_2 = pd.to_numeric(df["Average Cost"], errors="coerce") > pd.to_numeric(df["Mkt Price"], errors="coerce")
+    return assign_two_limit_breaches(df, -0.20, -0.30, extra_limit_2_mask=extra_limit_2)
+
+
 def add_equity_drawdown_columns(df):
     df = add_high_last_year(df)
     df = add_ytd_drawdown(df)
@@ -491,24 +542,9 @@ def main():
     portia_data_mutualfund_merge = add_non_equity_drawdown_columns(portia_data_mutualfund_merge)
 
     ##################### Set Limits ################################################################
-    # For Equity
-
-    portia_data_equity_merge[["Limit 1", "Limit 2"]] = [-0.20, -0.30]
-    # Pay Attention to the deault value
-    portia_data_equity_merge["Breach"] = "No Breach"
-
-    #for i in range(0,len(portia_data_equity_merge.index)):
-        
-    # if portia_data_equity_merge["Sec"][i]=="CNY" or portia_data_equity_merge["Sec"][i]=="HKD":
-    #  portia_data_equity_merge[["Limit 1"]][i] = [-0.2]
-    #  portia_data_equity_merge[["Limit 2"]][i] = [-0.3]
-
-    for i in range(0,len(portia_data_equity_merge.index)):
-      # if portia_data_equity_merge["Sec Curr"][i]!="KRW": #or portia_data_equity_merge["Sec"][i] != "CNY":  IF MARKET SITUATION CHANGE, UPDATE HERE！！！########
-      #     portia_data_equity_merge["Limit 1"][i]=-0.20
-      #     portia_data_equity_merge["Limit 2"][i]=-0.30
-          drawdown = portia_data_equity_merge[BREACH_DRAWDOWN_COLUMN][i]
-          portia_data_equity_merge.loc[i, "Breach"] = classify_two_limit_breach(drawdown, -0.20, -0.30)
+    # Breach / Severity use Holding Period Drawdown only. YTD Drawdown is kept as a
+    # reporting column and is never used to decide Limit 1 / Limit 2.
+    portia_data_equity_merge = assign_equity_breaches(portia_data_equity_merge)
               
     ################################# IF MARKET SITUATION CHANGE, UPDATE HERE########################################          
       # if portia_data_equity_merge["Sec Curr"][i]=="KRW": #or portia_data_equity_merge["Sec"][i] == "CNY":
@@ -525,25 +561,8 @@ def main():
 
     #print(portia_data_equity_merge.head(6))
 
-    # For Fixed Income
-    # Set different Limits
-    for i in range(0,len(portia_data_fi_merge)):
-        if portia_data_fi_merge["Grade"][i] == "HY":
-            portia_data_fi_merge.loc[i, "Limit 1"] = -0.15
-            portia_data_fi_merge.loc[i, "Limit 2"] = -0.25
-        else:
-            portia_data_fi_merge.loc[i, "Limit 1"] = -0.08
-            portia_data_fi_merge.loc[i, "Limit 2"] = -0.15
-
-    # exclude TBHTHYEF
-    for i in range(0,len(portia_data_fi_merge)):
-        drawdown = portia_data_fi_merge[BREACH_DRAWDOWN_COLUMN][i]
-        if portia_data_fi_merge["Grade"][i] == "HY" and portia_data_fi_merge["Fund Name"][i] != "TBHTHYEF":
-            portia_data_fi_merge.loc[i, "Breach"] = classify_two_limit_breach(drawdown, -0.15, -0.25)
-        elif portia_data_fi_merge["Grade"][i] == "HY":
-            portia_data_fi_merge.loc[i, "Breach"] = "No Breach"
-        elif portia_data_fi_merge["Grade"][i] == "IG":
-            portia_data_fi_merge.loc[i, "Breach"] = classify_two_limit_breach(drawdown, -0.08, -0.15)
+    # For Fixed Income (Holding Period Drawdown; exclude TBHTHYEF)
+    portia_data_fi_merge = assign_fi_breaches(portia_data_fi_merge)
             
 
     #### add a new column called Severity #########
@@ -572,27 +591,8 @@ def main():
     portia_data_ig_merge = portia_data_fi_merge[portia_data_fi_merge["Grade"] == "IG"].sort_values("Breach")
 
     ######################################## For Mutual Fund################################################################
-    portia_data_mutualfund_merge[["Limit 1", "Limit 2"]] = [-0.20, -0.30]
-    # Pay Attention to the deault value
-    portia_data_mutualfund_merge["Breach"] = "No Breach"
-
-    #for i in range(0,len(portia_data_equity_merge.index)):
-        
-    # if portia_data_equity_merge["Sec"][i]=="CNY" or portia_data_equity_merge["Sec"][i]=="HKD":
-    #  portia_data_equity_merge[["Limit 1"]][i] = [-0.2]
-    #  portia_data_equity_merge[["Limit 2"]][i] = [-0.3]
-
-    for i in range(0,len(portia_data_mutualfund_merge.index)):
-      ## if portia_data_equity_merge["Sec"][i]!="HKD": #or portia_data_equity_merge["Sec"][i] != "CNY": 
-          portia_data_mutualfund_merge["Limit 1"][i]=-0.20
-          portia_data_mutualfund_merge["Limit 2"][i]=-0.30
-          drawdown = portia_data_mutualfund_merge[BREACH_DRAWDOWN_COLUMN][i]
-          if drawdown <= -0.20 and drawdown > -0.30 :
-              portia_data_mutualfund_merge.loc[i, "Breach"] = "Breach Limit 1"
-          elif drawdown <= -0.30 and portia_data_mutualfund_merge["Average Cost"][i] > portia_data_mutualfund_merge["Mkt Price"][i]:  # add another condition to exclude the stock split 
-              portia_data_mutualfund_merge.loc[i, "Breach"] = "Breach Limit 2"
-          else:
-              portia_data_mutualfund_merge.loc[i, "Breach"] = "No Breach"
+    # Breach uses Holding Period Drawdown, not YTD Drawdown.
+    portia_data_mutualfund_merge = assign_mutualfund_breaches(portia_data_mutualfund_merge)
 
 
 
