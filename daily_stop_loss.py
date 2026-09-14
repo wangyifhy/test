@@ -625,10 +625,10 @@ def main():
 
     output_path = output_excel_path(today)
     with pd.ExcelWriter(output_path) as writer:
-        portia_data_equity_merge.to_excel(writer, sheet_name='Equity')
-        portia_data_hy_merge.to_excel(writer, sheet_name='High Yield')
-        portia_data_ig_merge.to_excel(writer, sheet_name='Investment Grade')
-        portia_data_mutualfund_merge.to_excel(writer, sheet_name='Mutual Fund')
+        portia_data_equity_merge.to_excel(writer, sheet_name='Equity', index=False)
+        portia_data_hy_merge.to_excel(writer, sheet_name='High Yield', index=False)
+        portia_data_ig_merge.to_excel(writer, sheet_name='Investment Grade', index=False)
+        portia_data_mutualfund_merge.to_excel(writer, sheet_name='Mutual Fund', index=False)
     print("Wrote", output_path)
 
 
