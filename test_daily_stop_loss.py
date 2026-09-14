@@ -88,9 +88,25 @@ class YahooHighExtractionTests(unittest.TestCase):
 
     def test_fetch_last_year_highs_uses_download(self):
         hist = pd.DataFrame({"High": [10.0, 22.0, 18.0]})
-        with patch.object(sl.yf, "download", return_value=hist):
+        with patch.object(sl.yf, "download", return_value=hist) as mock_download:
             highs = sl.fetch_last_year_highs(["AAPL"])
         self.assertAlmostEqual(highs["AAPL"], 22.0)
+        self.assertEqual(mock_download.call_args.kwargs["auto_adjust"], False)
+
+    def test_fetch_last_year_highs_fallback_is_unadjusted(self):
+        hist = pd.DataFrame({"High": [10.0, 22.0, 18.0]})
+
+        class FakeTicker:
+            def history(self, **kwargs):
+                self.kwargs = kwargs
+                return hist
+
+        fake = FakeTicker()
+        with patch.object(sl.yf, "download", side_effect=RuntimeError("batch failed")):
+            with patch.object(sl.yf, "Ticker", return_value=fake):
+                highs = sl.fetch_last_year_highs(["AAPL"])
+        self.assertAlmostEqual(highs["AAPL"], 22.0)
+        self.assertEqual(fake.kwargs["auto_adjust"], False)
 
 
 if __name__ == "__main__":

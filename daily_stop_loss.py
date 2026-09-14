@@ -161,7 +161,11 @@ def _max_high_from_download(data, ticker, single=False):
 
 
 def fetch_last_year_highs(yahoo_tickers):
-    """Return a dict of Yahoo ticker -> max High over the trailing year."""
+    """Return a dict of Yahoo ticker -> raw (unadjusted) max High over the trailing year.
+
+    Prices are not adjusted for stock splits or dividends, so they match the
+    quoted market price scale (e.g. AZN.L in GBp pence).
+    """
     highs = {ticker: np.nan for ticker in yahoo_tickers}
     tickers = [ticker for ticker in yahoo_tickers if ticker]
     if not tickers:
@@ -172,7 +176,7 @@ def fetch_last_year_highs(yahoo_tickers):
             tickers=tickers,
             period="1y",
             interval="1d",
-            auto_adjust=True,
+            auto_adjust=False,
             progress=False,
             threads=True,
             group_by="ticker",
@@ -186,7 +190,7 @@ def fetch_last_year_highs(yahoo_tickers):
     missing = [ticker for ticker in tickers if pd.isna(highs.get(ticker))]
     for ticker in missing:
         try:
-            hist = yf.Ticker(ticker).history(period="1y", auto_adjust=True, interval="1d")
+            hist = yf.Ticker(ticker).history(period="1y", auto_adjust=False, interval="1d")
             highs[ticker] = _max_high_from_history(hist)
         except Exception as exc:
             print("Yahoo Finance history failed for " + str(ticker) + ":", exc)
