@@ -224,5 +224,68 @@ class YahooHighExtractionTests(unittest.TestCase):
         self.assertAlmostEqual(highs["AZN.L"], 157.32)
 
 
+class CopyOnWriteAssignmentTests(unittest.TestCase):
+    """Pandas 3 Copy-on-Write forbids chained assignment such as df[col][i] = value."""
+
+    def test_data_cleaning_writes_benchmark_on_filtered_rows(self):
+        initial = pd.DataFrame(
+            {
+                "Fund Name": ["F1", "F2", "F3"],
+                "Security ID": ["A", "B", "C"],
+                "Sec Type": ["Common Stock", "Corporate Bond", "Mutual Fund"],
+                "Mkt Price": ["100", "90", "80"],
+                "Average Cost": ["110", "95", "85"],
+            }
+        )
+        last = pd.DataFrame(
+            {
+                "Fund Name": ["F1", "F2", "F3"],
+                "Security ID": ["A", "B", "C"],
+                "Sec Type": ["Common Stock", "Corporate Bond", "Mutual Fund"],
+                "Mkt Price": ["80", "70", "60"],
+                "Average Cost": ["110", "95", "85"],
+                "Security Desc": ["Apple Inc", "FOO 5 1/2", "Fund X"],
+            }
+        )
+        equity, fi, mf = sl.data_cleaning(initial, last)
+        self.assertAlmostEqual(equity.iloc[0]["Price Benchmark"], 100.0)
+        self.assertAlmostEqual(equity.iloc[0]["Mkt Price"], 80.0)
+        self.assertAlmostEqual(fi.iloc[0]["Price Benchmark"], 90.0)
+        self.assertAlmostEqual(mf.iloc[0]["Price Benchmark"], 80.0)
+        self.assertEqual(list(equity.columns).count("Price Benchmark"), 1)
+
+    def test_assign_equity_breaches_on_boolean_slice(self):
+        parent = pd.DataFrame(
+            {
+                "Fund Name": ["A", "B", "C"],
+                "Sec Curr": ["USD", "USD", "USD"],
+                "Sec Type": ["Common Stock", "Common Stock", "Bond"],
+                "Holding Period Drawdown": [-0.35, -0.10, -0.50],
+            }
+        )
+        slice_df = parent[parent["Sec Type"] == "Common Stock"]
+        result = sl.assign_equity_breaches(slice_df)
+        self.assertEqual(list(result["Breach"]), ["Breach Limit 2", "No Breach"])
+        self.assertTrue((result["Limit 1"] == sl.EQUITY_LIMIT_1).all())
+
+    def test_drawdown_helpers_on_boolean_slice(self):
+        parent = pd.DataFrame(
+            {
+                "Security ID": ["AAPL US", "MSFT US", "BOND"],
+                "Sec Curr": ["USD", "USD", "USD"],
+                "Sec Type": ["Common Stock", "Common Stock", "Bond"],
+                "Mkt Price": [80.0, 90.0, 70.0],
+                "Average Cost": [100.0, 100.0, 100.0],
+                "Price Benchmark": [100.0, 100.0, 100.0],
+            }
+        )
+        slice_df = parent[parent["Sec Type"] == "Common Stock"]
+        with patch.object(sl, "fetch_last_year_highs", return_value={"AAPL": 200.0, "MSFT": 180.0}):
+            result = sl.add_equity_drawdown_columns(slice_df)
+        self.assertAlmostEqual(result.iloc[0]["YTD Drawdown"], -0.20)
+        self.assertAlmostEqual(result.iloc[0]["Holding Period Drawdown"], -0.20)
+        self.assertAlmostEqual(result.iloc[0]["High Last Year"], 200.0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -90,6 +90,27 @@ def output_excel_path(today):
     return OUTPUT_DIR + "daily_output_" + today + " test.xlsx"
 
 
+def _as_frame(df):
+    """Return an independent DataFrame so later writes are not chained assignment.
+
+    Pandas 3 Copy-on-Write raises ChainedAssignmentError for patterns such as
+    ``df["Limit 1"][i] = -0.20`` or assigning into a filtered view. Always copy
+    first, then set columns with ``.loc[:, col] = value``.
+    """
+    if df is None:
+        return df
+    return df.copy()
+
+
+def _to_numeric_columns(df, columns):
+    df = _as_frame(df)
+    updates = {}
+    for column in columns:
+        if column in df.columns:
+            updates[column] = pd.to_numeric(df[column], errors="coerce")
+    return df.assign(**updates) if updates else df
+
+
 def to_yahoo_ticker(security_id, sec_curr=None):
     """Convert a Portia / Bloomberg-style security ID to a Yahoo Finance ticker."""
     if security_id is None:
@@ -283,8 +304,9 @@ def fetch_last_year_highs(yahoo_tickers):
 
 def add_high_last_year(df):
     """Add High Last Year from Yahoo Finance for each equity ticker."""
+    df = _as_frame(df)
     if df.empty:
-        df["High Last Year"] = pd.Series(dtype=float)
+        df.loc[:, "High Last Year"] = np.nan
         return df
 
     if "Sec Curr" in df.columns:
@@ -299,7 +321,7 @@ def add_high_last_year(df):
     unique_tickers = sorted({ticker for ticker in yahoo_tickers if ticker})
     print("Fetching last-year highs from Yahoo Finance for " + str(len(unique_tickers)) + " unique ticker(s)...")
     high_map = fetch_last_year_highs(unique_tickers)
-    df["High Last Year"] = [
+    df.loc[:, "High Last Year"] = [
         high_map.get(ticker, np.nan) if ticker else np.nan
         for ticker in yahoo_tickers
     ]
@@ -313,19 +335,22 @@ def add_high_last_year(df):
 
 
 def add_ytd_drawdown(df):
-    df["YTD Drawdown"] = (df["Mkt Price"] - df["Price Benchmark"]) / df["Price Benchmark"]
+    df = _as_frame(df)
+    df.loc[:, "YTD Drawdown"] = (df["Mkt Price"] - df["Price Benchmark"]) / df["Price Benchmark"]
     return df
 
 
 def add_holding_period_drawdown(df):
+    df = _as_frame(df)
     average_cost = df["Average Cost"].replace(0, np.nan)
-    df["Holding Period Drawdown"] = (df["Mkt Price"] - df["Average Cost"]) / average_cost
+    df.loc[:, "Holding Period Drawdown"] = (df["Mkt Price"] - df["Average Cost"]) / average_cost
     return df
 
 
 def add_drawdown_from_high(df):
+    df = _as_frame(df)
     high_last_year = df["High Last Year"].replace(0, np.nan)
-    df["Drawdown from High"] = (df["Mkt Price"] - df["High Last Year"]) / high_last_year
+    df.loc[:, "Drawdown from High"] = (df["Mkt Price"] - df["High Last Year"]) / high_last_year
     return df
 
 
@@ -351,6 +376,7 @@ def apply_excluded_fund_breaches(df):
     """Force No Breach for any fund in EXCLUDED_FUNDS, regardless of asset class."""
     if df is None or df.empty or "Fund Name" not in df.columns or "Breach" not in df.columns:
         return df
+    df = _as_frame(df)
     excluded = df["Fund Name"].astype(str).isin(EXCLUDED_FUNDS)
     df.loc[excluded, "Breach"] = "No Breach"
     return df
@@ -374,9 +400,10 @@ def equity_limits_for_currency(sec_curr):
 
 def assign_two_limit_breaches(df, limit_1, limit_2, extra_limit_2_mask=None):
     """Assign Limit 1/2 and Breach from Holding Period Drawdown only. Never uses YTD Drawdown."""
+    df = _as_frame(df)
     dd = _holding_period_drawdown_series(df)
-    df["Limit 1"] = limit_1
-    df["Limit 2"] = limit_2
+    df.loc[:, "Limit 1"] = limit_1
+    df.loc[:, "Limit 2"] = limit_2
     breach = pd.Series("No Breach", index=df.index)
     limit_2_mask = dd <= limit_2
     if extra_limit_2_mask is not None:
@@ -385,44 +412,47 @@ def assign_two_limit_breaches(df, limit_1, limit_2, extra_limit_2_mask=None):
         limit_2_mask = limit_2_mask & extra
     breach = breach.mask((dd <= limit_1) & (dd > limit_2), "Breach Limit 1")
     breach = breach.mask(limit_2_mask, "Breach Limit 2")
-    df["Breach"] = breach
+    df.loc[:, "Breach"] = breach
     return df
 
 
 def assign_equity_breaches(df):
     """Assign equity Limit 1/2 and Breach using Sec Curr-specific thresholds."""
+    df = _as_frame(df)
     dd = _holding_period_drawdown_series(df)
     if "Sec Curr" in df.columns:
         limits = df["Sec Curr"].map(equity_limits_for_currency)
     else:
         limits = pd.Series([(EQUITY_LIMIT_1, EQUITY_LIMIT_2)] * len(df), index=df.index)
-    df["Limit 1"] = limits.map(lambda pair: pair[0])
-    df["Limit 2"] = limits.map(lambda pair: pair[1])
+    df.loc[:, "Limit 1"] = limits.map(lambda pair: pair[0])
+    df.loc[:, "Limit 2"] = limits.map(lambda pair: pair[1])
     breach = pd.Series("No Breach", index=df.index)
     breach = breach.mask((dd <= df["Limit 1"]) & (dd > df["Limit 2"]), "Breach Limit 1")
     breach = breach.mask(dd <= df["Limit 2"], "Breach Limit 2")
-    df["Breach"] = breach
+    df.loc[:, "Breach"] = breach
     return apply_excluded_fund_breaches(df)
 
 
 def assign_fi_breaches(df):
+    df = _as_frame(df)
     dd = _holding_period_drawdown_series(df)
     hy = df["Grade"].astype(str) == "HY"
     ig = df["Grade"].astype(str) == "IG"
 
-    df["Limit 1"] = np.where(hy, HY_LIMIT_1, IG_LIMIT_1)
-    df["Limit 2"] = np.where(hy, HY_LIMIT_2, IG_LIMIT_2)
+    df.loc[:, "Limit 1"] = np.where(hy, HY_LIMIT_1, IG_LIMIT_1)
+    df.loc[:, "Limit 2"] = np.where(hy, HY_LIMIT_2, IG_LIMIT_2)
 
     breach = pd.Series("No Breach", index=df.index)
     breach = breach.mask(hy & (dd <= HY_LIMIT_1) & (dd > HY_LIMIT_2), "Breach Limit 1")
     breach = breach.mask(hy & (dd <= HY_LIMIT_2), "Breach Limit 2")
     breach = breach.mask(ig & (dd <= IG_LIMIT_1) & (dd > IG_LIMIT_2), "Breach Limit 1")
     breach = breach.mask(ig & (dd <= IG_LIMIT_2), "Breach Limit 2")
-    df["Breach"] = breach
+    df.loc[:, "Breach"] = breach
     return apply_excluded_fund_breaches(df)
 
 
 def assign_mutualfund_breaches(df):
+    df = _as_frame(df)
     extra_limit_2 = pd.to_numeric(df["Average Cost"], errors="coerce") > pd.to_numeric(df["Mkt Price"], errors="coerce")
     df = assign_two_limit_breaches(df, MUTUAL_FUND_LIMIT_1, MUTUAL_FUND_LIMIT_2, extra_limit_2_mask=extra_limit_2)
     return apply_excluded_fund_breaches(df)
@@ -430,9 +460,9 @@ def assign_mutualfund_breaches(df):
 
 def assign_severity(df):
     """Set Severity from Breach text: 'Breach Limit 1' -> 1, 'Breach Limit 2' -> 2."""
-    df = df.copy()
+    df = _as_frame(df)
     severity = df["Breach"].astype(str).str.extract(r"(\d+)\s*$", expand=False)
-    df["Severity"] = severity.fillna("")
+    df.loc[:, "Severity"] = severity.fillna("")
     return df
 
 
@@ -451,35 +481,59 @@ def add_non_equity_drawdown_columns(df):
 
 
 def clean_portia_columns(portia_data):
+    portia_data = _as_frame(portia_data)
     portia_data.columns = [str(column).replace("\ufeff", "").replace("\xef\xbb\xbf", "").strip() for column in portia_data.columns]
     if "Security ID" in portia_data.columns:
-        portia_data["Security ID"] = portia_data["Security ID"].apply(
+        stripped_ids = portia_data["Security ID"].map(
             lambda x: x[1:] if isinstance(x, str) and x.startswith("'") else x
         )
+        portia_data.loc[:, "Security ID"] = stripped_ids
     return portia_data
+
+
+def _filter_sec_type_equals(df, value):
+    return df.loc[df["Sec Type"] == value].copy()
+
+
+def _filter_sec_type_contains(df, pattern):
+    mask = df["Sec Type"].str.contains(pattern, case=False).fillna(False)
+    return df.loc[mask].copy()
+
+
+def _initial_price_chunk(df):
+    return df.loc[:, ["Fund Name", "Security ID", "Mkt Price"]].rename(
+        columns={"Mkt Price": "Initial Mkt Price"}
+    )
+
+
+def _add_price_benchmark(merged):
+    merged = _as_frame(merged)
+    benchmark = merged["Initial Mkt Price"].fillna(merged["Average Cost"])
+    merged = merged.assign(**{"Price Benchmark": benchmark})
+    return _to_numeric_columns(merged, ["Price Benchmark", "Mkt Price", "Average Cost"])
 
 
 ############################## Data Cleaning ############################################# add DC on 2024 Dec to fulfill SFC requirement
 def data_cleaning(portia_data_initial, portia_data_last):
-    # Filter for Equity
-    portia_data_initial_equity = portia_data_initial[portia_data_initial["Sec Type"] == "Common Stock"]
-    portia_data_last_equity = portia_data_last[portia_data_last["Sec Type"] == "Common Stock"]
+    # Filter for Equity. .copy() is required under pandas Copy-on-Write.
+    portia_data_initial_equity = _filter_sec_type_equals(portia_data_initial, "Common Stock")
+    portia_data_last_equity = _filter_sec_type_equals(portia_data_last, "Common Stock")
 
     # Filter for Fixed Income
-    portia_data_initial_fi = portia_data_initial.loc[portia_data_initial["Sec Type"].str.contains("bond", case=False).fillna(False)]
-    portia_data_last_fi = portia_data_last.loc[portia_data_last["Sec Type"].str.contains("bond", case=False).fillna(False)]
+    portia_data_initial_fi = _filter_sec_type_contains(portia_data_initial, "bond")
+    portia_data_last_fi = _filter_sec_type_contains(portia_data_last, "bond")
     #print(portia_data_last_fi)
 
     # Filter for Mutual Fund
-    portia_data_initial_mutualfund = portia_data_initial[portia_data_initial["Sec Type"] == "Mutual Fund"]
-    portia_data_last_mutualfund = portia_data_last[portia_data_last["Sec Type"] == "Mutual Fund"]
+    portia_data_initial_mutualfund = _filter_sec_type_equals(portia_data_initial, "Mutual Fund")
+    portia_data_last_mutualfund = _filter_sec_type_equals(portia_data_last, "Mutual Fund")
     #print (portia_data_last_mutualfund)
 
 
     # Need to filter 20220419 Fund Name, Security ID, Market Price
-    portia_data_initial_equity_chunk = portia_data_initial_equity[["Fund Name", "Security ID", "Mkt Price"]].rename(columns={"Mkt Price": "Initial Mkt Price"})
-    portia_data_initial_fi_chunk = portia_data_initial_fi[["Fund Name", "Security ID", "Mkt Price"]].rename(columns={"Mkt Price": "Initial Mkt Price"})
-    portia_data_initial_mutualfund_chunk = portia_data_initial_mutualfund[["Fund Name", "Security ID", "Mkt Price"]].rename(columns={"Mkt Price": "Initial Mkt Price"})
+    portia_data_initial_equity_chunk = _initial_price_chunk(portia_data_initial_equity)
+    portia_data_initial_fi_chunk = _initial_price_chunk(portia_data_initial_fi)
+    portia_data_initial_mutualfund_chunk = _initial_price_chunk(portia_data_initial_mutualfund)
 
     ########################## left join
     portia_data_equity_merge = portia_data_last_equity.merge(portia_data_initial_equity_chunk, how = "left", on = ["Fund Name", "Security ID"])
@@ -489,30 +543,10 @@ def data_cleaning(portia_data_initial, portia_data_last):
 
     
 ########### Replace Initial Mkt Price with Average Cost, changed on 2024/12/11 due to update of Operation Procedure
-    portia_data_equity_merge["Price Benchmark"] = portia_data_equity_merge["Initial Mkt Price"].fillna(portia_data_equity_merge["Average Cost"])
-    #portia_data_equity_merge["Price Benchmark"] = portia_data_equity_merge["Average Cost"]    
-    portia_data_fi_merge["Price Benchmark"] = portia_data_fi_merge["Initial Mkt Price"].fillna(portia_data_fi_merge["Average Cost"])
-    #portia_data_fi_merge["Price Benchmark"] = portia_data_fi_merge["Average Cost"]
-    portia_data_mutualfund_merge["Price Benchmark"] = portia_data_mutualfund_merge["Initial Mkt Price"].fillna(portia_data_mutualfund_merge["Average Cost"])
-    #portia_data_mutualfund_merge["Price Benchmark"] = portia_data_mutualfund_merge["Average Cost"]
-    #print(portia_data_equity_merge.head(6))
+    portia_data_equity_merge = _add_price_benchmark(portia_data_equity_merge)
+    portia_data_fi_merge = _add_price_benchmark(portia_data_fi_merge)
+    portia_data_mutualfund_merge = _add_price_benchmark(portia_data_mutualfund_merge)
 
-    #print(type(portia_data_equity_merge["Price Benchmark"][2]))
-
-    ##### Change numbers needed into NUMBERS
-    portia_data_equity_merge["Price Benchmark"] = portia_data_equity_merge["Price Benchmark"].apply(lambda x: float(x))
-    portia_data_equity_merge["Mkt Price"] = portia_data_equity_merge["Mkt Price"].apply(lambda x: float(x))
-    portia_data_equity_merge["Average Cost"] = portia_data_equity_merge["Average Cost"].apply(lambda x: float(x))
-
-    portia_data_fi_merge["Price Benchmark"] = portia_data_fi_merge["Price Benchmark"].apply(lambda x: float(x))
-    portia_data_fi_merge["Mkt Price"] = portia_data_fi_merge["Mkt Price"].apply(lambda x: float(x))
-    portia_data_fi_merge["Average Cost"] = portia_data_fi_merge["Average Cost"].apply(lambda x: float(x))
-    
-    portia_data_mutualfund_merge["Price Benchmark"] = portia_data_mutualfund_merge["Price Benchmark"].apply(lambda x: float(x))
-    portia_data_mutualfund_merge["Mkt Price"] = portia_data_mutualfund_merge["Mkt Price"].apply(lambda x: float(x))
-    portia_data_mutualfund_merge["Average Cost"] = portia_data_mutualfund_merge["Average Cost"].apply(lambda x: float(x))
-           
-    
     return portia_data_equity_merge, portia_data_fi_merge,portia_data_mutualfund_merge
 
 
@@ -572,8 +606,8 @@ def main():
 
     #print (portia_data_last)
 
-    portia_data_initial_mutualfund = portia_data_initial[portia_data_initial["Sec Type"] == "Mutual Fund"]
-    portia_data_last_mutualfund = portia_data_last[portia_data_last["Sec Type"] == "Mutual Fund"]
+    portia_data_initial_mutualfund = _filter_sec_type_equals(portia_data_initial, "Mutual Fund")
+    portia_data_last_mutualfund = _filter_sec_type_equals(portia_data_last, "Mutual Fund")
 
     #print (portia_data_initial_mutualfund)
 
@@ -607,7 +641,7 @@ def main():
 
 
     # Here need to be extremely CAREFUL, since the default is IG, it's more conservative to assmue bond without rating is high yield, which has strict limit
-    portia_data_fi_merge["Grade"] = portia_data_fi_merge["Grade"].fillna("IG")
+    portia_data_fi_merge.loc[:, "Grade"] = portia_data_fi_merge["Grade"].fillna("IG")
 
     #print(portia_data_fi_merge)
 
@@ -645,8 +679,8 @@ def main():
     # Sort by Grade
     portia_data_fi_merge = portia_data_fi_merge.sort_values("Grade")
     # Seperate by investment grade
-    portia_data_hy_merge = portia_data_fi_merge[portia_data_fi_merge["Grade"] == "HY"].sort_values("Breach")
-    portia_data_ig_merge = portia_data_fi_merge[portia_data_fi_merge["Grade"] == "IG"].sort_values("Breach")
+    portia_data_hy_merge = portia_data_fi_merge.loc[portia_data_fi_merge["Grade"] == "HY"].sort_values("Breach").copy()
+    portia_data_ig_merge = portia_data_fi_merge.loc[portia_data_fi_merge["Grade"] == "IG"].sort_values("Breach").copy()
 
     ######################################## For Mutual Fund################################################################
     # Breach uses Holding Period Drawdown, not YTD Drawdown.
