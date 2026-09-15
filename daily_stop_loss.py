@@ -30,12 +30,9 @@ IG_LIMIT_1 = -0.08
 IG_LIMIT_2 = -0.15
 
 # Excluded funds — add or remove fund codes here only.
-# Dropped from the fixed-income run entirely (not in High Yield / IG tabs).
-EXCLUDED_FI_FUNDS = (
+# These names are never flagged as a stop-loss breach (any asset class).
+EXCLUDED_FUNDS = (
     "DCFH2024",
-)
-# High-yield funds kept in the report but never flagged as a stop-loss breach.
-EXCLUDED_HY_FUNDS = (
     "TBHTHYEF",
 )
 
@@ -350,6 +347,15 @@ def classify_two_limit_breach(drawdown, limit_1, limit_2):
     return "No Breach"
 
 
+def apply_excluded_fund_breaches(df):
+    """Force No Breach for any fund in EXCLUDED_FUNDS, regardless of asset class."""
+    if df is None or df.empty or "Fund Name" not in df.columns or "Breach" not in df.columns:
+        return df
+    excluded = df["Fund Name"].astype(str).isin(EXCLUDED_FUNDS)
+    df.loc[excluded, "Breach"] = "No Breach"
+    return df
+
+
 def _holding_period_drawdown_series(df):
     if "Holding Period Drawdown" not in df.columns:
         raise KeyError("Holding Period Drawdown is required to assign Breach; YTD Drawdown is not used")
@@ -396,31 +402,30 @@ def assign_equity_breaches(df):
     breach = breach.mask((dd <= df["Limit 1"]) & (dd > df["Limit 2"]), "Breach Limit 1")
     breach = breach.mask(dd <= df["Limit 2"], "Breach Limit 2")
     df["Breach"] = breach
-    return df
+    return apply_excluded_fund_breaches(df)
 
 
 def assign_fi_breaches(df):
     dd = _holding_period_drawdown_series(df)
     hy = df["Grade"].astype(str) == "HY"
     ig = df["Grade"].astype(str) == "IG"
-    exclude_hy = df["Fund Name"].astype(str).isin(EXCLUDED_HY_FUNDS)
 
     df["Limit 1"] = np.where(hy, HY_LIMIT_1, IG_LIMIT_1)
     df["Limit 2"] = np.where(hy, HY_LIMIT_2, IG_LIMIT_2)
 
     breach = pd.Series("No Breach", index=df.index)
-    hy_active = hy & ~exclude_hy
-    breach = breach.mask(hy_active & (dd <= HY_LIMIT_1) & (dd > HY_LIMIT_2), "Breach Limit 1")
-    breach = breach.mask(hy_active & (dd <= HY_LIMIT_2), "Breach Limit 2")
+    breach = breach.mask(hy & (dd <= HY_LIMIT_1) & (dd > HY_LIMIT_2), "Breach Limit 1")
+    breach = breach.mask(hy & (dd <= HY_LIMIT_2), "Breach Limit 2")
     breach = breach.mask(ig & (dd <= IG_LIMIT_1) & (dd > IG_LIMIT_2), "Breach Limit 1")
     breach = breach.mask(ig & (dd <= IG_LIMIT_2), "Breach Limit 2")
     df["Breach"] = breach
-    return df
+    return apply_excluded_fund_breaches(df)
 
 
 def assign_mutualfund_breaches(df):
     extra_limit_2 = pd.to_numeric(df["Average Cost"], errors="coerce") > pd.to_numeric(df["Mkt Price"], errors="coerce")
-    return assign_two_limit_breaches(df, MUTUAL_FUND_LIMIT_1, MUTUAL_FUND_LIMIT_2, extra_limit_2_mask=extra_limit_2)
+    df = assign_two_limit_breaches(df, MUTUAL_FUND_LIMIT_1, MUTUAL_FUND_LIMIT_2, extra_limit_2_mask=extra_limit_2)
+    return apply_excluded_fund_breaches(df)
 
 
 def assign_severity(df):
@@ -588,7 +593,6 @@ def main():
 
     ##################### Start to Calculate Fixed Income Drawdowns #################################
     portia_data_fi_merge = data_cleaning(portia_data_initial, portia_data_last)[1]
-    portia_data_fi_merge = portia_data_fi_merge[~portia_data_fi_merge["Fund Name"].astype(str).isin(EXCLUDED_FI_FUNDS)].reset_index(drop=True)
     portia_data_fi_merge = add_non_equity_drawdown_columns(portia_data_fi_merge)
     portia_data_fi_merge.insert(loc=3, column='Issuer', value=portia_data_fi_merge['Security Desc'].str.split(' ', n=1, expand=True)[0])
 
@@ -631,7 +635,7 @@ def main():
 
     #print(portia_data_equity_merge.head(6))
 
-    # For Fixed Income (Holding Period Drawdown; HY names in EXCLUDED_HY_FUNDS skip breach)
+    # For Fixed Income (Holding Period Drawdown; EXCLUDED_FUNDS skip breach)
     portia_data_fi_merge = assign_fi_breaches(portia_data_fi_merge)
     portia_data_equity_merge = assign_severity(portia_data_equity_merge)
     portia_data_fi_merge = assign_severity(portia_data_fi_merge)

@@ -104,7 +104,7 @@ class DrawdownColumnTests(unittest.TestCase):
     def test_assign_fi_breaches_uses_holding_period(self):
         hy1, hy2 = sl.HY_LIMIT_1, sl.HY_LIMIT_2
         ig1, ig2 = sl.IG_LIMIT_1, sl.IG_LIMIT_2
-        excluded = sl.EXCLUDED_HY_FUNDS[0]
+        excluded = sl.EXCLUDED_FUNDS[0]
         df = pd.DataFrame(
             {
                 "Fund Name": ["A", "A", excluded, "B"],
@@ -122,8 +122,21 @@ class DrawdownColumnTests(unittest.TestCase):
         self.assertEqual(list(result["Limit 2"]), [hy2, hy2, hy2, ig2])
 
     def test_excluded_fund_lists_are_defined_at_top(self):
-        self.assertIn("DCFH2024", sl.EXCLUDED_FI_FUNDS)
-        self.assertIn("TBHTHYEF", sl.EXCLUDED_HY_FUNDS)
+        self.assertIn("DCFH2024", sl.EXCLUDED_FUNDS)
+        self.assertIn("TBHTHYEF", sl.EXCLUDED_FUNDS)
+
+    def test_excluded_funds_skip_breach_on_equity(self):
+        l1, l2 = sl.EQUITY_LIMIT_1, sl.EQUITY_LIMIT_2
+        excluded = sl.EXCLUDED_FUNDS[0]
+        df = pd.DataFrame(
+            {
+                "Fund Name": ["NORMAL", excluded],
+                "Sec Curr": ["USD", "USD"],
+                "Holding Period Drawdown": [l2 - 0.05, l2 - 0.05],
+            }
+        )
+        result = sl.assign_equity_breaches(df)
+        self.assertEqual(list(result["Breach"]), ["Breach Limit 2", "No Breach"])
 
     def test_mutual_fund_limits_follow_equity_constants(self):
         self.assertEqual(sl.MUTUAL_FUND_LIMIT_1, sl.EQUITY_LIMIT_1)
