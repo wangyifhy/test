@@ -28,7 +28,16 @@ HY_LIMIT_1 = -0.15
 HY_LIMIT_2 = -0.25
 IG_LIMIT_1 = -0.08
 IG_LIMIT_2 = -0.15
-EXCLUDED_HY_FUNDS = ("TBHTHYEF",)
+
+# Excluded funds — add or remove fund codes here only.
+# Dropped from the fixed-income run entirely (not in High Yield / IG tabs).
+EXCLUDED_FI_FUNDS = (
+    "DCFH2024",
+)
+# High-yield funds kept in the report but never flagged as a stop-loss breach.
+EXCLUDED_HY_FUNDS = (
+    "TBHTHYEF",
+)
 
 # Equity limits by Portia column "Sec Curr".
 # Each entry is (Limit 1, Limit 2). Edit one currency without changing the others.
@@ -579,7 +588,7 @@ def main():
 
     ##################### Start to Calculate Fixed Income Drawdowns #################################
     portia_data_fi_merge = data_cleaning(portia_data_initial, portia_data_last)[1]
-    portia_data_fi_merge = portia_data_fi_merge[portia_data_fi_merge["Fund Name"] != "DCFH2024"].reset_index(drop=True)
+    portia_data_fi_merge = portia_data_fi_merge[~portia_data_fi_merge["Fund Name"].astype(str).isin(EXCLUDED_FI_FUNDS)].reset_index(drop=True)
     portia_data_fi_merge = add_non_equity_drawdown_columns(portia_data_fi_merge)
     portia_data_fi_merge.insert(loc=3, column='Issuer', value=portia_data_fi_merge['Security Desc'].str.split(' ', n=1, expand=True)[0])
 
@@ -622,7 +631,7 @@ def main():
 
     #print(portia_data_equity_merge.head(6))
 
-    # For Fixed Income (Holding Period Drawdown; exclude TBHTHYEF)
+    # For Fixed Income (Holding Period Drawdown; HY names in EXCLUDED_HY_FUNDS skip breach)
     portia_data_fi_merge = assign_fi_breaches(portia_data_fi_merge)
     portia_data_equity_merge = assign_severity(portia_data_equity_merge)
     portia_data_fi_merge = assign_severity(portia_data_fi_merge)

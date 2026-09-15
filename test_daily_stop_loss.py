@@ -121,6 +121,10 @@ class DrawdownColumnTests(unittest.TestCase):
         self.assertEqual(list(result["Limit 1"]), [hy1, hy1, hy1, ig1])
         self.assertEqual(list(result["Limit 2"]), [hy2, hy2, hy2, ig2])
 
+    def test_excluded_fund_lists_are_defined_at_top(self):
+        self.assertIn("DCFH2024", sl.EXCLUDED_FI_FUNDS)
+        self.assertIn("TBHTHYEF", sl.EXCLUDED_HY_FUNDS)
+
     def test_mutual_fund_limits_follow_equity_constants(self):
         self.assertEqual(sl.MUTUAL_FUND_LIMIT_1, sl.EQUITY_LIMIT_1)
         self.assertEqual(sl.MUTUAL_FUND_LIMIT_2, sl.EQUITY_LIMIT_2)
